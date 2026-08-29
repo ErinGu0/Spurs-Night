@@ -1,0 +1,26 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "ReadParameters",
+            "Effect": "Allow",
+            "Action": "ssm:GetParameter",
+            "Resource": [
+                "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/spurs/eventbrite-token",
+                "arn:aws:ssm:REGION:ACCOUNT_ID:parameter/spurs/google-api-key"
+            ]
+        },
+        {
+            "Sid": "DecryptParameters",
+            "Effect": "Allow",
+            "Action": "kms:Decrypt",
+            "Resource": "*"
+        },
+        {
+            "Sid": "WriteCalendarFiles",
+            "Effect": "Allow",
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::BUCKET_NAME/*"
+        }
+    ]
+}
