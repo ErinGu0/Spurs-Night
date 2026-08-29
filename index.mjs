@@ -217,7 +217,7 @@ function buildHtml(events) {
   .cell.has:hover .ev{background:#4a2a18;color:#fff;border-color:transparent}
 
   /* popover (desktop) / modal (mobile) */
-  .backdrop{display:none;position:fixed;inset:0;background:rgba(20,10,5,.45);z-index:8}
+  .backdrop{display:none;position:absolute;inset:0;background:rgba(20,10,5,.32);z-index:8}
   .pop{display:none;position:absolute;z-index:9;width:270px;padding:15px 17px;
     border-radius:10px;background:#fbf8f3;border:1px solid rgba(42,17,8,.16);
     box-shadow:0 10px 28px rgba(42,17,8,.20)}
@@ -243,8 +243,7 @@ function buildHtml(events) {
     .cell.has{background:#e6dfd4;border-color:rgba(42,17,8,.2)}
     .cell.has .num{color:#2a1108;font-weight:700}
     .ev{display:none}
-    .pop{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-      width:min(87vw,330px);max-height:80vh;overflow:auto}
+    .pop{width:min(92%,300px);padding:14px 16px}
     .pop .x{display:block}
   }
 </style></head>
@@ -258,9 +257,9 @@ function buildHtml(events) {
     <span>Th</span><span>Fr</span><span>Sa</span></div>
   <div class="wrap">
     <div class="grid" id="grid"></div>
+    <div class="backdrop" id="backdrop"></div>
     <div class="pop" id="pop"></div>
   </div>
-  <div class="backdrop" id="backdrop"></div>
 <script>
 const D = ${data};
 const MONTHS = ["January","February","March","April","May","June","July",
@@ -338,11 +337,11 @@ function showPop(cell) {
   const x = document.getElementById("popx");
   if (x) x.onclick = hidePop;
 
-  if (isMobile()) { backdrop.style.display = "block"; return; }
-
-  backdrop.style.display = "none";
+  backdrop.style.display = isMobile() ? "block" : "none";
   const pw = pop.offsetWidth, ph = pop.offsetHeight;
-  let left = cell.offsetLeft + cell.offsetWidth / 2 - pw / 2;
+  let left = isMobile()
+    ? (wrap.clientWidth - pw) / 2
+    : cell.offsetLeft + cell.offsetWidth / 2 - pw / 2;
   left = Math.max(0, Math.min(left, wrap.clientWidth - pw));
   let top = cell.offsetTop + cell.offsetHeight + 6;
   if (top + ph > wrap.clientHeight) top = cell.offsetTop - ph - 6;
