@@ -53,6 +53,25 @@ function fold(line) {
   return parts.join("\r\n ");
 }
 
+// Google Calendar descriptions may hold a ticket link (Hart House, etc.) either as
+// a bare URL or as an <a href> that Google's editor inserts. Pull it out and clean
+// the remaining text so the link renders as a button, not as raw text.
+function extractLink(desc) {
+  if (!desc) return { url: "", text: "" };
+  const anchor = desc.match(/href=["'](https?:\/\/[^"']+)["']/i);
+  const bare   = desc.match(/https?:\/\/[^\s<>"']+/i);
+  const url    = (anchor && anchor[1]) || (bare && bare[0]) || "";
+
+  let text = desc.replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, " ");
+  if (url) text = text.split(url).join(" ");
+  text = text
+    .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ").trim();
+
+  return { url, text };
+}
+
 // ---------------------------------------------------------------- sources
 async function fetchGoogle(googleKey) {
   const url = new URL(
@@ -71,17 +90,20 @@ async function fetchGoogle(googleKey) {
 
   return items
     .filter((e) => e.status !== "cancelled" && e.start)
-    .map((e) => ({
-      uid: `gc-${e.id}@spursnight`,
-      title: e.summary || "SPURS NIGHT",
-      description: e.description || "",
-      location: e.location || "",
-      url: "",
-      allDay: !e.start.dateTime,
-      start: new Date(e.start.dateTime || `${e.start.date}T12:00:00Z`),
-      end:   new Date(e.end?.dateTime  || `${e.end?.date || e.start.date}T12:00:00Z`),
-      source: "google",
-    }));
+    .map((e) => {
+      const { url, text } = extractLink(e.description || "");
+      return {
+        uid: `gc-${e.id}@spursnight`,
+        title: e.summary || "SPURS NIGHT",
+        description: text,
+        location: e.location || "",
+        url,                                   // external ticket link, if one was pasted
+        allDay: !e.start.dateTime,
+        start: new Date(e.start.dateTime || `${e.start.date}T12:00:00Z`),
+        end:   new Date(e.end?.dateTime  || `${e.end?.date || e.start.date}T12:00:00Z`),
+        source: "google",
+      };
+    });
 }
 
 async function fetchEventbrite(token) {
@@ -134,7 +156,14 @@ function merge(googleEvents, ebEvents) {
     // which manual entry does this Eventbrite event replace?
     // prefer a title match; otherwise assume a lone manual entry is the same thing
     let i = sameDay.findIndex((g) => norm(g.title) === norm(e.title));
-    if (i === -1 && sameDay.length === 1) i = 0;
+    // "SPURS NIGHT" (manual) vs "SPURS NIGHT - BAILA SAFICA w/ AVRIL" (Eventbrite)
+    if (i === -1) i = sameDay.findIndex((g) => {
+      const a = norm(g.title), b = norm(e.title);
+      return !g.url && a && b && (a.startsWith(b) || b.startsWith(a));
+    });
+    // a lone untitled-match manual entry is assumed to be the same night --
+    // unless it has its own ticket link, which makes it a real separate event
+    if (i === -1 && sameDay.length === 1 && !sameDay[0].url) i = 0;
 
     if (i !== -1) {
       const m = sameDay[i];
