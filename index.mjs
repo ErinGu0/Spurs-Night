@@ -106,11 +106,11 @@ async function fetchGoogle(googleKey) {
     });
 }
 
-async function fetchEventbrite(token) {
+async function fetchEbWithStatus(token, status) {
   const out = []; let cont = null;
   do {
     const url = new URL(`https://www.eventbriteapi.com/v3/organizations/${EB_ORG_ID}/events/`);
-    url.searchParams.set("status", "live");
+    url.searchParams.set("status", status);
     url.searchParams.set("order_by", "start_asc");
     url.searchParams.set("expand", "venue");
     if (cont) url.searchParams.set("continuation", cont);
@@ -135,6 +135,17 @@ async function fetchEventbrite(token) {
     cont = data.pagination?.has_more_items ? data.pagination.continuation : null;
   } while (cont);
   return out;
+}
+
+// Past nights should stay on the calendar as history. Not every account accepts a
+// multi-value status filter, so fall back to live-only rather than failing the run.
+async function fetchEventbrite(token) {
+  try {
+    return await fetchEbWithStatus(token, "live,started,ended,completed");
+  } catch (err) {
+    console.warn("multi-status filter rejected, falling back to live:", err.message);
+    return await fetchEbWithStatus(token, "live");
+  }
 }
 
 // ------------- merge: Eventbrite supersedes the manual entry it corresponds to,
@@ -220,9 +231,9 @@ function buildHtml(events) {
   }));
 
   const today = localDate(new Date());
-  // open on the month of the next upcoming event; fall back to the current month
-  const next  = payload.find((p) => p.d >= today);
-  const [sy, sm] = (next ? next.d : today).split("-").map(Number);
+  // always open on the current month; `today` is recomputed every run, so the
+  // calendar rolls over to the new month on its own
+  const [sy, sm] = today.split("-").map(Number);
 
   const data = JSON.stringify({ events: payload, y: sy, m: sm - 1, today })
     .replace(/</g, "\\u003c");
@@ -258,13 +269,15 @@ function buildHtml(events) {
   .cell.today{border-color:rgba(42,17,8,.45)}
   .cell.today .num{color:#2a1108;font-weight:700}
   .cell.has{cursor:pointer}
-  .ev{margin-top:6px;display:block;text-decoration:none;background:#2a1108;color:#fff;
-    border-radius:5px;padding:5px 7px;font-size:11px;font-weight:700;line-height:1.25;
+  .ev{margin-top:6px;display:block;text-decoration:none;background:transparent;
+    color:#2a1108;border:1px dashed rgba(42,17,8,.45);border-radius:4px;
+    padding:5px 7px;font-size:11px;font-weight:700;line-height:1.3;
     letter-spacing:.02em;overflow:hidden}
-  .ev.soon{background:transparent;color:#6d6156;border:1px dashed rgba(42,17,8,.35)}
+  .ev:hover{border-color:#2a1108;background:rgba(42,17,8,.055)}
+  .ev.soon{color:#6d6156;border-color:rgba(42,17,8,.26)}
   .ev .tm{display:block;font-weight:400;opacity:.85;font-size:10px;margin-top:1px;
     letter-spacing:0}
-  .cell.has:hover .ev{background:#4a2a18;color:#fff;border-color:transparent}
+  .cell.has:hover .ev{border-color:#2a1108;background:rgba(42,17,8,.055)}
 
   /* popover (desktop) / modal (mobile) */
   .backdrop{display:none;position:absolute;inset:0;background:rgba(20,10,5,.32);z-index:8}
@@ -361,10 +374,12 @@ function popBody(evs) {
     evs.map((e) => {
       const p = e.d.split("-").map(Number);
       const wd = LONG[new Date(p[0], p[1] - 1, p[2]).getDay()];
-      const cta = e.url
-        ? '<a class="btn" href="' + esc(e.url) +
-          '" target="_blank" rel="noopener">Get tickets</a>'
-        : '<span class="pending">Tickets not on sale yet</span>';
+      const cta = e.d < D.today
+        ? '<span class="pending">This event has passed</span>'
+        : e.url
+          ? '<a class="btn" href="' + esc(e.url) +
+            '" target="_blank" rel="noopener">Get tickets</a>'
+          : '<span class="pending">Tickets not on sale yet</span>';
       return "<h3>" + esc(e.t) + "</h3>" +
         '<p class="when">' + wd + ", " + MONTHS[p[1] - 1] + " " + p[2] +
         (e.time ? " &middot; " + esc(e.time) : "") + "</p>" +
@@ -393,8 +408,12 @@ function showPop(cell) {
     ? (wrap.clientWidth - pw) / 2
     : cell.offsetLeft + cell.offsetWidth / 2 - pw / 2;
   left = Math.max(0, Math.min(left, wrap.clientWidth - pw));
-  let top = cell.offsetTop + cell.offsetHeight + 6;
-  if (top + ph > wrap.clientHeight) top = cell.offsetTop - ph - 6;
+  // anchor to the chip, not the bottom of the (now much taller) square cell
+  const chip = cell.querySelector(".ev");
+  const aTop = chip ? chip.offsetTop : cell.offsetTop;
+  const aH   = chip ? chip.offsetHeight : cell.offsetHeight;
+  let top = aTop + aH + 5;
+  if (top + ph > wrap.clientHeight) top = aTop - ph - 5;
   if (top < 0) top = 0;
   pop.style.left = left + "px";
   pop.style.top  = top + "px";
