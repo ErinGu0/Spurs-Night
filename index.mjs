@@ -248,8 +248,9 @@ function buildHtml(events) {
 <title>${CALENDAR_NAME}</title>
 <style>
   *{box-sizing:border-box}
-  html,body{-webkit-text-size-adjust:100%}
-  body{margin:0 auto;max-width:1040px;background:transparent;color:#2a1a12;
+  html,body{height:100%;-webkit-text-size-adjust:100%}
+  body{margin:0 auto;max-width:1040px;display:flex;flex-direction:column;
+    background:transparent;color:#2a1a12;
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
 
   .hd{display:flex;align-items:center;justify-content:space-between;padding:0 0 14px;gap:4px}
@@ -264,9 +265,10 @@ function buildHtml(events) {
   .dow span{text-align:center;font-size:11.5px;letter-spacing:.12em;color:#8d8177;
     text-transform:uppercase;padding:3px 0}
 
-  .wrap{position:relative}
-  .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;grid-auto-rows:auto}
-  .cell{aspect-ratio:1;background:transparent;border:1px solid rgba(42,17,8,.13);
+  .wrap{position:relative;flex:1 1 auto;display:flex;flex-direction:column;min-height:0}
+  .grid{flex:1 1 auto;display:grid;grid-template-columns:repeat(7,1fr);gap:4px;
+    grid-auto-rows:1fr}
+  .cell{background:transparent;border:1px solid rgba(42,17,8,.13);
     padding:8px 9px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
   .cell.blank{border-color:rgba(42,17,8,.05)}
   .num{text-align:right;font-size:12.5px;color:#9a8e83;line-height:1;flex:0 0 auto}
@@ -305,8 +307,8 @@ function buildHtml(events) {
     .hd{padding:0 0 8px}
     .dow{gap:2px}
     .dow span{font-size:9.5px;letter-spacing:.03em}
-    .grid{gap:2px;grid-auto-rows:42px}
-    .cell{aspect-ratio:auto;padding:0;align-items:center;justify-content:center}
+    .grid{gap:2px;grid-auto-rows:minmax(38px,1fr)}
+    .cell{padding:0;align-items:center;justify-content:center}
     .num{text-align:center;width:100%;font-size:12.5px}
     .cell.has{background:#e6dfd4;border-color:rgba(42,17,8,.2)}
     .cell.has .num{color:#2a1108;font-weight:700}
@@ -351,7 +353,7 @@ function renderGrid() {
   document.getElementById("title").textContent = MONTHS[m] + " " + y;
   const first = new Date(y, m, 1).getDay();
   const days  = new Date(y, m + 1, 0).getDate();
-  const cells = Math.ceil((first + days) / 7) * 7;
+  const cells = 42;                       // always 6 rows: height never jumps
   let html = "";
 
   for (let i = 0; i < cells; i++) {
