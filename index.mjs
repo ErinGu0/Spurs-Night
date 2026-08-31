@@ -268,23 +268,22 @@ function buildHtml(events) {
   .wrap{position:relative;flex:1 1 auto;display:flex;flex-direction:column;min-height:0}
   .grid{flex:1 1 auto;display:grid;grid-template-columns:repeat(7,1fr);gap:4px;
     grid-auto-rows:1fr}
-  .cell{background:transparent;border:1px solid rgba(42,17,8,.13);
-    padding:8px 9px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
-  .cell.blank{border-color:rgba(42,17,8,.05)}
+  .cell{background:#edeae3;border:0;padding:9px 10px;display:flex;
+    flex-direction:column;min-height:0;overflow:hidden}
+  .cell.blank{background:#f1eee8}
   .num{text-align:right;font-size:12.5px;color:#9a8e83;line-height:1;flex:0 0 auto}
-  .cell.today{border-color:rgba(42,17,8,.45)}
+  .cell.today{box-shadow:inset 0 0 0 1px rgba(42,17,8,.4)}
   .cell.today .num{color:#2a1108;font-weight:700}
   .cell.has{cursor:pointer}
-  .ev{margin-top:6px;display:block;text-decoration:none;background:transparent;
-    color:#2a1108;border:1px dashed rgba(42,17,8,.45);border-radius:4px;
-    padding:5px 7px;font-size:11px;font-weight:700;line-height:1.3;
-    letter-spacing:.02em;overflow:hidden}
-  .ev:hover{border-color:#2a1108;background:rgba(42,17,8,.055)}
-  .ev.soon{color:#6d6156;border-color:rgba(42,17,8,.26)}
-  .ev.sold{opacity:.6}
-  .ev .tm{display:block;font-weight:400;opacity:.85;font-size:10px;margin-top:1px;
-    letter-spacing:0}
-  .cell.has:hover .ev{border-color:#2a1108;background:rgba(42,17,8,.055)}
+  .ev{display:block;text-decoration:none;color:#2a1108;margin-top:9px;
+    font-size:11.5px;line-height:1.24;letter-spacing:.02em}
+  .ev + .ev{margin-top:11px}
+  .ev .tm{display:block;font-weight:700;margin-bottom:2px}
+  .ev .ti{display:block;font-weight:600;text-transform:uppercase;color:#3a1d10}
+  .ev:hover .ti{text-decoration:underline}
+  .ev.soon .ti{color:#6d6156}
+  .ev.sold{opacity:.62}
+  .cell.has{cursor:pointer}
 
   /* popover (desktop) / modal (mobile) */
   .backdrop{display:none;position:absolute;inset:0;background:rgba(20,10,5,.32);z-index:8}
@@ -310,7 +309,7 @@ function buildHtml(events) {
     .grid{gap:2px;grid-auto-rows:minmax(38px,1fr)}
     .cell{padding:0;align-items:center;justify-content:center}
     .num{text-align:center;width:100%;font-size:12.5px}
-    .cell.has{background:#e6dfd4;border-color:rgba(42,17,8,.2)}
+    .cell.has{background:#ded5c8}
     .cell.has .num{color:#2a1108;font-weight:700}
     .ev{display:none}
     .pop{width:min(92%,300px);padding:14px 16px}
@@ -364,9 +363,9 @@ function renderGrid() {
     const cls = "cell" + (key === D.today ? " today" : "") + (evs.length ? " has" : "");
     html += '<div class="' + cls + '" data-d="' + key + '"><div class="num">' + day + "</div>";
     for (const e of evs) {
-      const tail = e.sold ? "Sold out" : e.time;
-      const inner = esc(e.t) +
-        (tail ? '<span class="tm">' + esc(tail) + "</span>" : "");
+      const tm = e.sold ? "Sold out" : e.time;
+      const inner = (tm ? '<span class="tm">' + esc(tm) + "</span>" : "") +
+        '<span class="ti">' + esc(e.t) + "</span>";
       const cls = "ev" + (e.sold ? " sold" : "") + (e.url ? "" : " soon");
       html += e.url
         ? '<a class="' + cls + '" href="' + esc(e.url) +
