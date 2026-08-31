@@ -234,7 +234,7 @@ function buildHtml(events) {
 <style>
   *{box-sizing:border-box}
   html,body{-webkit-text-size-adjust:100%}
-  body{margin:0;background:transparent;color:#2a1a12;
+  body{margin:0 auto;max-width:1040px;background:transparent;color:#2a1a12;
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
 
   .hd{display:flex;align-items:center;justify-content:space-between;padding:0 0 14px;gap:4px}
@@ -250,9 +250,9 @@ function buildHtml(events) {
     text-transform:uppercase;padding:3px 0}
 
   .wrap{position:relative}
-  .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;grid-auto-rows:88px}
-  .cell{background:transparent;border:1px solid rgba(42,17,8,.13);padding:7px 8px;
-    display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;grid-auto-rows:auto}
+  .cell{aspect-ratio:1;background:transparent;border:1px solid rgba(42,17,8,.13);
+    padding:8px 9px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
   .cell.blank{border-color:rgba(42,17,8,.05)}
   .num{text-align:right;font-size:12.5px;color:#9a8e83;line-height:1;flex:0 0 auto}
   .cell.today{border-color:rgba(42,17,8,.45)}
@@ -288,7 +288,7 @@ function buildHtml(events) {
     .dow{gap:2px}
     .dow span{font-size:9.5px;letter-spacing:.03em}
     .grid{gap:2px;grid-auto-rows:42px}
-    .cell{padding:0;align-items:center;justify-content:center}
+    .cell{aspect-ratio:auto;padding:0;align-items:center;justify-content:center}
     .num{text-align:center;width:100%;font-size:12.5px}
     .cell.has{background:#e6dfd4;border-color:rgba(42,17,8,.2)}
     .cell.has .num{color:#2a1108;font-weight:700}
