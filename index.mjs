@@ -61,8 +61,9 @@ async function fetchGoogle(googleKey) {
   url.searchParams.set("key", googleKey);
   url.searchParams.set("singleEvents", "true");
   url.searchParams.set("orderBy", "startTime");
-  url.searchParams.set("timeMin", new Date(Date.now() - 864e5).toISOString());
-  url.searchParams.set("maxResults", "250");
+  // keep six months of history so the back arrow shows past nights, not empty grids
+  url.searchParams.set("timeMin", new Date(Date.now() - 182 * 864e5).toISOString());
+  url.searchParams.set("maxResults", "500");
 
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Google Calendar ${res.status}: ${await res.text()}`);
@@ -114,22 +115,41 @@ async function fetchEventbrite(token) {
   return out;
 }
 
-// ------------------------------------- merge: Eventbrite wins on dates it covers
+// ------------- merge: Eventbrite supersedes the manual entry it corresponds to,
+// ------------- but multiple events on one date are all kept
 function merge(googleEvents, ebEvents) {
-  const byDate = new Map();
-  for (const g of googleEvents) byDate.set(localDate(g.start), g);
+  const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const byDate = new Map();                    // date -> array of events
+
+  for (const g of googleEvents) {
+    const d = localDate(g.start);
+    if (!byDate.has(d)) byDate.set(d, []);
+    byDate.get(d).push(g);
+  }
 
   for (const e of ebEvents) {
-    const day = localDate(e.start);
-    const manual = byDate.get(day);
-    if (manual?.description && !e.description.includes(manual.description)) {
-      e.description = e.description
-        ? `${e.description}\n\n${manual.description}`
-        : manual.description;
+    const d = localDate(e.start);
+    const sameDay = byDate.get(d) || [];
+
+    // which manual entry does this Eventbrite event replace?
+    // prefer a title match; otherwise assume a lone manual entry is the same thing
+    let i = sameDay.findIndex((g) => norm(g.title) === norm(e.title));
+    if (i === -1 && sameDay.length === 1) i = 0;
+
+    if (i !== -1) {
+      const m = sameDay[i];
+      if (m.description && !e.description.includes(m.description)) {
+        e.description = e.description
+          ? `${e.description}\n\n${m.description}`
+          : m.description;
+      }
+      sameDay.splice(i, 1);                    // superseded
     }
-    byDate.set(day, e);
+    sameDay.push(e);
+    byDate.set(d, sameDay);
   }
-  return [...byDate.values()].sort((a, b) => a.start - b.start);
+
+  return [...byDate.values()].flat().sort((a, b) => a.start - b.start);
 }
 
 // ---------------------------------------------------------------- iCal output
@@ -171,7 +191,8 @@ function buildHtml(events) {
   }));
 
   const today = localDate(new Date());
-  const next  = payload.find((p) => p.d >= today) || payload[payload.length - 1];
+  // open on the month of the next upcoming event; fall back to the current month
+  const next  = payload.find((p) => p.d >= today);
   const [sy, sm] = (next ? next.d : today).split("-").map(Number);
 
   const data = JSON.stringify({ events: payload, y: sy, m: sm - 1, today })
