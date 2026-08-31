@@ -112,7 +112,7 @@ async function fetchEbWithStatus(token, status) {
     const url = new URL(`https://www.eventbriteapi.com/v3/organizations/${EB_ORG_ID}/events/`);
     url.searchParams.set("status", status);
     url.searchParams.set("order_by", "start_asc");
-    url.searchParams.set("expand", "venue");
+    url.searchParams.set("expand", "venue,ticket_availability");
     if (cont) url.searchParams.set("continuation", cont);
 
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -126,6 +126,8 @@ async function fetchEbWithStatus(token, status) {
         description: e.description?.text || "",
         location: e.venue?.address?.localized_address_display || e.venue?.name || "",
         url: e.url || "",
+        soldOut: e.ticket_availability?.is_sold_out === true,
+        waitlist: e.ticket_availability?.waitlist_available === true,
         allDay: false,
         start: new Date(e.start.utc),
         end:   new Date(e.end.utc),
@@ -228,6 +230,8 @@ function buildHtml(events) {
     loc: e.location,
     desc: (e.description || "").replace(/\s+/g, " ").trim().slice(0, 260),
     url: e.url,
+    sold: !!e.soldOut,
+    wait: !!e.waitlist,
   }));
 
   const today = localDate(new Date());
@@ -275,6 +279,7 @@ function buildHtml(events) {
     letter-spacing:.02em;overflow:hidden}
   .ev:hover{border-color:#2a1108;background:rgba(42,17,8,.055)}
   .ev.soon{color:#6d6156;border-color:rgba(42,17,8,.26)}
+  .ev.sold{opacity:.6}
   .ev .tm{display:block;font-weight:400;opacity:.85;font-size:10px;margin-top:1px;
     letter-spacing:0}
   .cell.has:hover .ev{border-color:#2a1108;background:rgba(42,17,8,.055)}
@@ -357,12 +362,14 @@ function renderGrid() {
     const cls = "cell" + (key === D.today ? " today" : "") + (evs.length ? " has" : "");
     html += '<div class="' + cls + '" data-d="' + key + '"><div class="num">' + day + "</div>";
     for (const e of evs) {
+      const tail = e.sold ? "Sold out" : e.time;
       const inner = esc(e.t) +
-        (e.time ? '<span class="tm">' + esc(e.time) + "</span>" : "");
+        (tail ? '<span class="tm">' + esc(tail) + "</span>" : "");
+      const cls = "ev" + (e.sold ? " sold" : "") + (e.url ? "" : " soon");
       html += e.url
-        ? '<a class="ev" href="' + esc(e.url) + '" target="_blank" rel="noopener">' +
-          inner + "</a>"
-        : '<span class="ev soon">' + inner + "</span>";
+        ? '<a class="' + cls + '" href="' + esc(e.url) +
+          '" target="_blank" rel="noopener">' + inner + "</a>"
+        : '<span class="' + cls + '">' + inner + "</span>";
     }
     html += "</div>";
   }
@@ -374,12 +381,16 @@ function popBody(evs) {
     evs.map((e) => {
       const p = e.d.split("-").map(Number);
       const wd = LONG[new Date(p[0], p[1] - 1, p[2]).getDay()];
+      const link = (label) => '<a class="btn" href="' + esc(e.url) +
+        '" target="_blank" rel="noopener">' + label + "</a>";
       const cta = e.d < D.today
         ? '<span class="pending">This event has passed</span>'
-        : e.url
-          ? '<a class="btn" href="' + esc(e.url) +
-            '" target="_blank" rel="noopener">Get tickets</a>'
-          : '<span class="pending">Tickets not on sale yet</span>';
+        : !e.url
+          ? '<span class="pending">Tickets not on sale yet</span>'
+          : e.sold
+            ? '<p class="when" style="margin:10px 0 4px">Sold out</p>' +
+              link(e.wait ? "Join the waitlist" : "View on Eventbrite")
+            : link("Get tickets");
       return "<h3>" + esc(e.t) + "</h3>" +
         '<p class="when">' + wd + ", " + MONTHS[p[1] - 1] + " " + p[2] +
         (e.time ? " &middot; " + esc(e.time) : "") + "</p>" +
