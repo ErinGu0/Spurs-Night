@@ -36,6 +36,8 @@ const timeFmt = new Intl.DateTimeFormat("en-CA", {
   timeZone: TIMEZONE, hour: "numeric", minute: "2-digit", hour12: true,
 });
 const localDate = (d) => dateFmt.format(d);
+const shortTime = (d) =>
+  timeFmt.format(d).replace(/\s/g, "").replace(/\./g, "").toUpperCase();
 const utcStamp  = (d) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
 
 const esc = (s) => String(s)
@@ -97,6 +99,7 @@ async function fetchGoogle(googleKey) {
         title: e.summary || "SPURS NIGHT",
         description: text,
         location: e.location || "",
+        place: (e.location || "").split(",")[0].trim(),
         url,                                   // external ticket link, if one was pasted
         allDay: !e.start.dateTime,
         start: new Date(e.start.dateTime || `${e.start.date}T12:00:00Z`),
@@ -125,6 +128,7 @@ async function fetchEbWithStatus(token, status) {
         title: e.name?.text || "SPURS NIGHT",
         description: e.description?.text || "",
         location: e.venue?.address?.localized_address_display || e.venue?.name || "",
+        place: e.venue?.name || "",
         url: e.url || "",
         soldOut: e.ticket_availability?.is_sold_out === true,
         waitlist: e.ticket_availability?.waitlist_available === true,
@@ -226,8 +230,10 @@ function buildHtml(events) {
   const payload = events.map((e) => ({
     d: localDate(e.start),
     t: e.title,
-    time: e.allDay ? "" : `${timeFmt.format(e.start)} – ${timeFmt.format(e.end)}`,
+    time: e.allDay ? "" : shortTime(e.start),
+    range: e.allDay ? "" : `${timeFmt.format(e.start)} – ${timeFmt.format(e.end)}`,
     loc: e.location,
+    place: e.place || (e.location || "").split(",")[0].trim(),
     desc: (e.description || "").replace(/\s+/g, " ").trim().slice(0, 260),
     url: e.url,
     sold: !!e.soldOut,
@@ -246,24 +252,29 @@ function buildHtml(events) {
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>${CALENDAR_NAME}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Syncopate:wght@400;700&display=swap">
 <style>
   *{box-sizing:border-box}
   html,body{height:100%;-webkit-text-size-adjust:100%}
   body{margin:0 auto;max-width:1040px;display:flex;flex-direction:column;
     background:transparent;color:#2a1a12;
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+    font-family:"Inter Tight","Helvetica Neue",Helvetica,Arial,sans-serif}
 
   .hd{display:flex;align-items:center;justify-content:space-between;padding:0 0 14px;gap:4px}
-  .hd h2{margin:0;flex:1 1 auto;text-align:center;font-size:clamp(18px,3vw,30px);
-    font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#2a1108}
+  .hd h2{margin:0;flex:1 1 auto;text-align:center;
+    font-family:"Syncopate","Helvetica Neue",Helvetica,Arial,sans-serif;
+    font-size:clamp(15px,2.1vw,23px);font-weight:700;letter-spacing:.01em;
+    text-transform:uppercase;color:#2a1108}
   .nav{background:none;border:0;cursor:pointer;font-size:22px;line-height:1;color:#3a2a20;
     opacity:.7;min-width:44px;min-height:44px;display:flex;align-items:center;
     justify-content:center;-webkit-tap-highlight-color:transparent}
   .nav:hover,.nav:active{opacity:1}
 
   .dow{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:4px}
-  .dow span{text-align:center;font-size:11.5px;letter-spacing:.12em;color:#8d8177;
-    text-transform:uppercase;padding:3px 0}
+  .dow span{text-align:center;font-size:11px;letter-spacing:.14em;color:#8d8177;
+    text-transform:uppercase;font-weight:500;padding:3px 0}
 
   .wrap{position:relative;flex:1 1 auto;display:flex;flex-direction:column;min-height:0}
   .grid{flex:1 1 auto;display:grid;grid-template-columns:repeat(7,1fr);gap:4px;
@@ -276,10 +287,12 @@ function buildHtml(events) {
   .cell.today .num{color:#2a1108;font-weight:700}
   .cell.has{cursor:pointer}
   .ev{display:block;text-decoration:none;color:#2a1108;margin-top:9px;
-    font-size:11.5px;line-height:1.24;letter-spacing:.02em}
+    font-size:12px;line-height:1.26;letter-spacing:.01em}
   .ev + .ev{margin-top:11px}
-  .ev .tm{display:block;font-weight:700;margin-bottom:2px}
-  .ev .ti{display:block;font-weight:600;text-transform:uppercase;color:#3a1d10}
+  .ev .tm{display:block;font-weight:700;margin-bottom:1px}
+  .ev .ti{display:block;font-weight:400;text-transform:uppercase;color:#3a1d10}
+  .ev .lo{display:block;font-weight:400;text-transform:uppercase;color:#7a6d60;
+    font-size:10.5px;margin-top:2px}
   .ev:hover .ti{text-decoration:underline}
   .ev.soon .ti{color:#6d6156}
   .ev.sold{opacity:.62}
@@ -363,9 +376,9 @@ function renderGrid() {
     const cls = "cell" + (key === D.today ? " today" : "") + (evs.length ? " has" : "");
     html += '<div class="' + cls + '" data-d="' + key + '"><div class="num">' + day + "</div>";
     for (const e of evs) {
-      const tm = e.sold ? "Sold out" : e.time;
-      const inner = (tm ? '<span class="tm">' + esc(tm) + "</span>" : "") +
-        '<span class="ti">' + esc(e.t) + "</span>";
+      const inner = (e.time ? '<span class="tm">' + esc(e.time) + "</span>" : "") +
+        '<span class="ti">' + esc(e.t) + "</span>" +
+        (e.place ? '<span class="lo">' + esc(e.place) + "</span>" : "");
       const cls = "ev" + (e.sold ? " sold" : "") + (e.url ? "" : " soon");
       html += e.url
         ? '<a class="' + cls + '" href="' + esc(e.url) +
@@ -394,7 +407,7 @@ function popBody(evs) {
             : link("Get tickets");
       return "<h3>" + esc(e.t) + "</h3>" +
         '<p class="when">' + wd + ", " + MONTHS[p[1] - 1] + " " + p[2] +
-        (e.time ? " &middot; " + esc(e.time) : "") + "</p>" +
+        (e.range ? " &middot; " + esc(e.range) : "") + "</p>" +
         (e.loc  ? "<p>" + esc(e.loc)  + "</p>" : "") +
         (e.desc ? "<p>" + esc(e.desc) + "</p>" : "") + cta;
     }).join('<hr style="border:0;border-top:1px solid rgba(0,0,0,.1);margin:13px 0">');
