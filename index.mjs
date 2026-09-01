@@ -294,8 +294,6 @@ function buildHtml(events) {
   .ev .lo{display:block;font-weight:400;text-transform:uppercase;color:#7a6d60;
     font-size:10.5px;margin-top:2px}
   .ev:hover .ti{text-decoration:underline}
-  .ev.soon .ti{color:#6d6156}
-  .ev.sold{opacity:.62}
   .cell.has{cursor:pointer}
 
   /* popover (desktop) / modal (mobile) */
