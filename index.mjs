@@ -437,8 +437,8 @@ function showPop(cell) {
   const chip = cell.querySelector(".ev");
   const aTop = chip ? chip.offsetTop : cell.offsetTop;
   const aH   = chip ? chip.offsetHeight : cell.offsetHeight;
-  let top = aTop + aH + 5;
-  if (top + ph > wrap.clientHeight) top = aTop - ph - 5;
+  let top = aTop + aH + 3;
+  if (top + ph > wrap.clientHeight) top = aTop - ph - 3;
   if (top < 0) top = 0;
   pop.style.left = left + "px";
   pop.style.top  = top + "px";
@@ -447,15 +447,16 @@ function showPop(cell) {
 grid.addEventListener("mouseover", (ev) => {
   if (isMobile()) return;
   const cell = ev.target.closest(".cell.has");
-  if (cell) showPop(cell);
+  if (cell) { showPop(cell); return; }
+  // moved onto a day with no event -- close, but leave just enough time to
+  // cross the few pixels between the chip and the popover itself
+  hideT = setTimeout(hidePop, 90);
 });
 grid.addEventListener("mouseleave", () => {
-  if (!isMobile()) hideT = setTimeout(hidePop, 220);
+  if (!isMobile()) hideT = setTimeout(hidePop, 90);
 });
 pop.addEventListener("mouseenter", () => clearTimeout(hideT));
-pop.addEventListener("mouseleave", () => {
-  if (!isMobile()) hideT = setTimeout(hidePop, 180);
-});
+pop.addEventListener("mouseleave", () => { if (!isMobile()) hidePop(); });
 grid.addEventListener("click", (ev) => {
   if (!isMobile()) return;
   const cell = ev.target.closest(".cell.has");
