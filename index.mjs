@@ -5,8 +5,8 @@
 import { SSMClient, GetParameterCommand } from "@aws-sdk/client-ssm";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
-const ssm = new SSMClient({});
-const s3  = new S3Client({});
+const ssmClient = new SSMClient({});
+const s3Client  = new S3Client({});
 
 const {
   CALENDAR_ID, S3_BUCKET, EB_ORG_ID,
@@ -22,49 +22,51 @@ const {
 let cache = null;
 async function getSecrets() {
   if (cache) return cache;
-  const get = (Name) => ssm.send(new GetParameterCommand({ Name, WithDecryption: true }));
-  const [eb, gk] = await Promise.all([get(PARAM_EB_TOKEN), get(PARAM_GOOGLE_KEY)]);
-  cache = { ebToken: eb.Parameter.Value, googleKey: gk.Parameter.Value };
+  const getParameter = (Name) => ssmClient.send(new GetParameterCommand({ Name, WithDecryption: true }));
+  const [eventbriteTokenParam, googleKeyParam] = await Promise.all([
+    getParameter(PARAM_EB_TOKEN), getParameter(PARAM_GOOGLE_KEY),
+  ]);
+  cache = { eventbriteToken: eventbriteTokenParam.Parameter.Value, googleKey: googleKeyParam.Parameter.Value };
   return cache;
 }
 
 // ---------------------------------------------------------------- helpers
-const dateFmt = new Intl.DateTimeFormat("en-CA", {
+const dateFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit",
 });
-const timeFmt = new Intl.DateTimeFormat("en-CA", {
+const timeFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: TIMEZONE, hour: "numeric", minute: "2-digit", hour12: true,
 });
-const localDate = (d) => dateFmt.format(d);
-const shortTime = (d) =>
-  timeFmt.format(d).replace(/\s/g, "").replace(/\./g, "").toUpperCase();
-const utcStamp  = (d) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+const localDate = (date) => dateFormatter.format(date);
+const shortTime = (date) =>
+  timeFormatter.format(date).replace(/\s/g, "").replace(/\./g, "").toUpperCase();
+const utcStamp  = (date) => date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
 
-const esc = (s) => String(s)
+const escapeIcsText = (value) => String(value)
   .replace(/\\/g, "\\\\").replace(/;/g, "\\;")
   .replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
 
 function fold(line) {
   if (Buffer.byteLength(line, "utf8") <= 75) return line;
-  const parts = []; let cur = "";
-  for (const ch of line) {
-    if (Buffer.byteLength(cur + ch, "utf8") > 73) { parts.push(cur); cur = ""; }
-    cur += ch;
+  const parts = []; let current = "";
+  for (const character of line) {
+    if (Buffer.byteLength(current + character, "utf8") > 73) { parts.push(current); current = ""; }
+    current += character;
   }
-  if (cur) parts.push(cur);
+  if (current) parts.push(current);
   return parts.join("\r\n ");
 }
 
 // Google Calendar descriptions may hold a ticket link (Hart House, etc.) either as
 // a bare URL or as an <a href> that Google's editor inserts. Pull it out and clean
 // the remaining text so the link renders as a button, not as raw text.
-function extractLink(desc) {
-  if (!desc) return { url: "", text: "" };
-  const anchor = desc.match(/href=["'](https?:\/\/[^"']+)["']/i);
-  const bare   = desc.match(/https?:\/\/[^\s<>"']+/i);
+function extractLink(description) {
+  if (!description) return { url: "", text: "" };
+  const anchor = description.match(/href=["'](https?:\/\/[^"']+)["']/i);
+  const bare   = description.match(/https?:\/\/[^\s<>"']+/i);
   const url    = (anchor && anchor[1]) || (bare && bare[0]) || "";
 
-  let text = desc.replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, " ");
+  let text = description.replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, " ");
   if (url) text = text.split(url).join(" ");
   text = text
     .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&")
@@ -86,116 +88,117 @@ async function fetchGoogle(googleKey) {
   url.searchParams.set("timeMin", new Date(Date.now() - 182 * 864e5).toISOString());
   url.searchParams.set("maxResults", "500");
 
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Google Calendar ${res.status}: ${await res.text()}`);
-  const { items = [] } = await res.json();
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Google Calendar ${response.status}: ${await response.text()}`);
+  const { items = [] } = await response.json();
 
   return items
-    .filter((e) => e.status !== "cancelled" && e.start)
-    .map((e) => {
-      const { url, text } = extractLink(e.description || "");
+    .filter((event) => event.status !== "cancelled" && event.start)
+    .map((event) => {
+      const { url, text } = extractLink(event.description || "");
       return {
-        uid: `gc-${e.id}@spursnight`,
-        title: e.summary || "SPURS NIGHT",
+        uid: `gc-${event.id}@spursnight`,
+        title: event.summary || "SPURS NIGHT",
         description: text,
-        location: e.location || "",
-        place: (e.location || "").split(",")[0].trim(),
+        location: event.location || "",
+        place: (event.location || "").split(",")[0].trim(),
         url,                                   // external ticket link, if one was pasted
-        allDay: !e.start.dateTime,
-        start: new Date(e.start.dateTime || `${e.start.date}T12:00:00Z`),
-        end:   new Date(e.end?.dateTime  || `${e.end?.date || e.start.date}T12:00:00Z`),
+        allDay: !event.start.dateTime,
+        start: new Date(event.start.dateTime || `${event.start.date}T12:00:00Z`),
+        end:   new Date(event.end?.dateTime  || `${event.end?.date || event.start.date}T12:00:00Z`),
         source: "google",
       };
     });
 }
 
-async function fetchEbWithStatus(token, status) {
-  const out = []; let cont = null;
+async function fetchEventbriteWithStatus(token, status) {
+  const events = []; let continuationToken = null;
   do {
     const url = new URL(`https://www.eventbriteapi.com/v3/organizations/${EB_ORG_ID}/events/`);
     url.searchParams.set("status", status);
     url.searchParams.set("order_by", "start_asc");
     url.searchParams.set("expand", "venue,ticket_availability");
-    if (cont) url.searchParams.set("continuation", cont);
+    if (continuationToken) url.searchParams.set("continuation", continuationToken);
 
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) throw new Error(`Eventbrite ${res.status}: ${await res.text()}`);
-    const data = await res.json();
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error(`Eventbrite ${response.status}: ${await response.text()}`);
+    const data = await response.json();
 
-    for (const e of data.events || []) {
-      out.push({
-        uid: `eb-${e.id}@spursnight`,
-        title: e.name?.text || "SPURS NIGHT",
-        description: e.description?.text || "",
-        location: e.venue?.address?.localized_address_display || e.venue?.name || "",
-        place: e.venue?.name || "",
-        url: e.url || "",
-        soldOut: e.ticket_availability?.is_sold_out === true,
-        waitlist: e.ticket_availability?.waitlist_available === true,
+    for (const event of data.events || []) {
+      events.push({
+        uid: `eb-${event.id}@spursnight`,
+        title: event.name?.text || "SPURS NIGHT",
+        description: event.description?.text || "",
+        location: event.venue?.address?.localized_address_display || event.venue?.name || "",
+        place: event.venue?.name || "",
+        url: event.url || "",
+        soldOut: event.ticket_availability?.is_sold_out === true,
+        waitlist: event.ticket_availability?.waitlist_available === true,
         allDay: false,
-        start: new Date(e.start.utc),
-        end:   new Date(e.end.utc),
+        start: new Date(event.start.utc),
+        end:   new Date(event.end.utc),
         source: "eventbrite",
       });
     }
-    cont = data.pagination?.has_more_items ? data.pagination.continuation : null;
-  } while (cont);
-  return out;
+    continuationToken = data.pagination?.has_more_items ? data.pagination.continuation : null;
+  } while (continuationToken);
+  return events;
 }
 
 // Past nights should stay on the calendar as history. Not every account accepts a
 // multi-value status filter, so fall back to live-only rather than failing the run.
 async function fetchEventbrite(token) {
   try {
-    return await fetchEbWithStatus(token, "live,started,ended,completed");
-  } catch (err) {
-    console.warn("multi-status filter rejected, falling back to live:", err.message);
-    return await fetchEbWithStatus(token, "live");
+    return await fetchEventbriteWithStatus(token, "live,started,ended,completed");
+  } catch (error) {
+    console.warn("multi-status filter rejected, falling back to live:", error.message);
+    return await fetchEventbriteWithStatus(token, "live");
   }
 }
 
 // ------------- merge: Eventbrite supersedes the manual entry it corresponds to,
 // ------------- but multiple events on one date are all kept
-function merge(googleEvents, ebEvents) {
-  const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function merge(googleEvents, eventbriteEvents) {
+  const normalize = (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const byDate = new Map();                    // date -> array of events
 
-  for (const g of googleEvents) {
-    const d = localDate(g.start);
-    if (!byDate.has(d)) byDate.set(d, []);
-    byDate.get(d).push(g);
+  for (const googleEvent of googleEvents) {
+    const date = localDate(googleEvent.start);
+    if (!byDate.has(date)) byDate.set(date, []);
+    byDate.get(date).push(googleEvent);
   }
 
-  for (const e of ebEvents) {
-    const d = localDate(e.start);
-    const sameDay = byDate.get(d) || [];
+  for (const eventbriteEvent of eventbriteEvents) {
+    const date = localDate(eventbriteEvent.start);
+    const sameDay = byDate.get(date) || [];
 
     // which manual entry does this Eventbrite event replace?
     // prefer a title match; otherwise assume a lone manual entry is the same thing
-    let i = sameDay.findIndex((g) => norm(g.title) === norm(e.title));
+    let matchIndex = sameDay.findIndex((googleEvent) => normalize(googleEvent.title) === normalize(eventbriteEvent.title));
     // "SPURS NIGHT" (manual) vs "SPURS NIGHT - BAILA SAFICA w/ AVRIL" (Eventbrite)
-    if (i === -1) i = sameDay.findIndex((g) => {
-      const a = norm(g.title), b = norm(e.title);
-      return !g.url && a && b && (a.startsWith(b) || b.startsWith(a));
+    if (matchIndex === -1) matchIndex = sameDay.findIndex((googleEvent) => {
+      const normalizedGoogleTitle = normalize(googleEvent.title), normalizedEventbriteTitle = normalize(eventbriteEvent.title);
+      return !googleEvent.url && normalizedGoogleTitle && normalizedEventbriteTitle &&
+        (normalizedGoogleTitle.startsWith(normalizedEventbriteTitle) || normalizedEventbriteTitle.startsWith(normalizedGoogleTitle));
     });
     // a lone untitled-match manual entry is assumed to be the same night --
     // unless it has its own ticket link, which makes it a real separate event
-    if (i === -1 && sameDay.length === 1 && !sameDay[0].url) i = 0;
+    if (matchIndex === -1 && sameDay.length === 1 && !sameDay[0].url) matchIndex = 0;
 
-    if (i !== -1) {
-      const m = sameDay[i];
-      if (m.description && !e.description.includes(m.description)) {
-        e.description = e.description
-          ? `${e.description}\n\n${m.description}`
-          : m.description;
+    if (matchIndex !== -1) {
+      const matchedEvent = sameDay[matchIndex];
+      if (matchedEvent.description && !eventbriteEvent.description.includes(matchedEvent.description)) {
+        eventbriteEvent.description = eventbriteEvent.description
+          ? `${eventbriteEvent.description}\n\n${matchedEvent.description}`
+          : matchedEvent.description;
       }
-      sameDay.splice(i, 1);                    // superseded
+      sameDay.splice(matchIndex, 1);                    // superseded
     }
-    sameDay.push(e);
-    byDate.set(d, sameDay);
+    sameDay.push(eventbriteEvent);
+    byDate.set(date, sameDay);
   }
 
-  return [...byDate.values()].flat().sort((a, b) => a.start - b.start);
+  return [...byDate.values()].flat().sort((eventA, eventB) => eventA.start - eventB.start);
 }
 
 // ---------------------------------------------------------------- iCal output
@@ -205,20 +208,20 @@ function buildIcs(events) {
     "BEGIN:VCALENDAR", "VERSION:2.0",
     "PRODID:-//Spurs Night//Calendar Sync//EN",
     "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
-    `X-WR-CALNAME:${esc(CALENDAR_NAME)}`,
+    `X-WR-CALNAME:${escapeIcsText(CALENDAR_NAME)}`,
     `X-WR-TIMEZONE:${TIMEZONE}`,
   ];
-  for (const e of events) {
-    lines.push("BEGIN:VEVENT", `UID:${e.uid}`, `DTSTAMP:${now}`);
-    if (e.allDay) {
-      lines.push(`DTSTART;VALUE=DATE:${localDate(e.start).replace(/-/g, "")}`);
+  for (const event of events) {
+    lines.push("BEGIN:VEVENT", `UID:${event.uid}`, `DTSTAMP:${now}`);
+    if (event.allDay) {
+      lines.push(`DTSTART;VALUE=DATE:${localDate(event.start).replace(/-/g, "")}`);
     } else {
-      lines.push(`DTSTART:${utcStamp(e.start)}`, `DTEND:${utcStamp(e.end)}`);
+      lines.push(`DTSTART:${utcStamp(event.start)}`, `DTEND:${utcStamp(event.end)}`);
     }
-    lines.push(`SUMMARY:${esc(e.title)}`);
-    if (e.description) lines.push(`DESCRIPTION:${esc(e.description)}`);
-    if (e.location)    lines.push(`LOCATION:${esc(e.location)}`);
-    if (e.url)         lines.push(`URL:${e.url}`);
+    lines.push(`SUMMARY:${escapeIcsText(event.title)}`);
+    if (event.description) lines.push(`DESCRIPTION:${escapeIcsText(event.description)}`);
+    if (event.location)    lines.push(`LOCATION:${escapeIcsText(event.location)}`);
+    if (event.url)         lines.push(`URL:${event.url}`);
     lines.push("END:VEVENT");
   }
   lines.push("END:VCALENDAR");
@@ -227,25 +230,25 @@ function buildIcs(events) {
 
 // ---------------------------------------------------------- month-grid output
 function buildHtml(events) {
-  const payload = events.map((e) => ({
-    d: localDate(e.start),
-    t: e.title,
-    time: e.allDay ? "" : shortTime(e.start),
-    range: e.allDay ? "" : `${timeFmt.format(e.start)} – ${timeFmt.format(e.end)}`,
-    loc: e.location,
-    place: e.place || (e.location || "").split(",")[0].trim(),
-    desc: (e.description || "").replace(/\s+/g, " ").trim().slice(0, 260),
-    url: e.url,
-    sold: !!e.soldOut,
-    wait: !!e.waitlist,
+  const payload = events.map((event) => ({
+    date: localDate(event.start),
+    title: event.title,
+    time: event.allDay ? "" : shortTime(event.start),
+    range: event.allDay ? "" : `${timeFormatter.format(event.start)} – ${timeFormatter.format(event.end)}`,
+    location: event.location,
+    place: event.place || (event.location || "").split(",")[0].trim(),
+    description: (event.description || "").replace(/\s+/g, " ").trim().slice(0, 260),
+    url: event.url,
+    soldOut: !!event.soldOut,
+    waitlist: !!event.waitlist,
   }));
 
   const today = localDate(new Date());
   // always open on the current month; `today` is recomputed every run, so the
   // calendar rolls over to the new month on its own
-  const [sy, sm] = today.split("-").map(Number);
+  const [startYear, startMonth] = today.split("-").map(Number);
 
-  const data = JSON.stringify({ events: payload, y: sy, m: sm - 1, today })
+  const data = JSON.stringify({ events: payload, year: startYear, month: startMonth - 1, today })
     .replace(/</g, "\\u003c");
 
   return `<!doctype html>
@@ -316,7 +319,7 @@ function buildHtml(events) {
   @media (max-width:620px){
     .hd{padding:0 0 8px}
     .dow{gap:2px}
-    .dow span{font-size:9.5px;letter-spacing:.03em}
+    .dow span{font-size:7px;letter-spacing:0;padding:3px 1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .grid{gap:2px;grid-auto-rows:minmax(38px,1fr)}
     .cell{padding:0;align-items:center;justify-content:center}
     .num{text-align:center;width:100%;font-size:12.5px}
@@ -333,141 +336,141 @@ function buildHtml(events) {
     <h2 id="title"></h2>
     <button class="nav" id="next" aria-label="Next month">&#8250;</button>
   </div>
-  <div class="dow"><span>Su</span><span>Mo</span><span>Tu</span><span>We</span>
-    <span>Th</span><span>Fr</span><span>Sa</span></div>
+  <div class="dow"><span>Sunday</span><span>Monday</span><span>Tuesday</span><span>Wednesday</span>
+    <span>Thursday</span><span>Friday</span><span>Saturday</span></div>
   <div class="wrap">
     <div class="grid" id="grid"></div>
     <div class="backdrop" id="backdrop"></div>
     <div class="pop" id="pop"></div>
   </div>
 <script>
-const D = ${data};
+const calendarData = ${data};
 const MONTHS = ["January","February","March","April","May","June","July",
   "August","September","October","November","December"];
-const LONG = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+const WEEKDAYS_LONG = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const byDay = {};
-for (const e of D.events) (byDay[e.d] = byDay[e.d] || []).push(e);
+for (const event of calendarData.events) (byDay[event.date] = byDay[event.date] || []).push(event);
 
-let y = D.y, m = D.m, hideT = null;
-const pad = (n) => String(n).padStart(2, "0");
-const esc = (s) => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+let year = calendarData.year, month = calendarData.month, hideTimeout = null;
+const padNumber = (number) => String(number).padStart(2, "0");
+const escapeHtml = (value) => String(value).replace(/&/g,"&amp;").replace(/</g,"&lt;")
   .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 
 const grid = document.getElementById("grid");
 const wrap = document.querySelector(".wrap");
-const pop = document.getElementById("pop");
+const popover = document.getElementById("pop");
 const backdrop = document.getElementById("backdrop");
 const isMobile = () => window.matchMedia("(max-width:620px)").matches;
 
 function renderGrid() {
-  document.getElementById("title").textContent = MONTHS[m] + " " + y;
-  const first = new Date(y, m, 1).getDay();
-  const days  = new Date(y, m + 1, 0).getDate();
-  const cells = 42;                       // always 6 rows: height never jumps
-  let html = "";
+  document.getElementById("title").textContent = MONTHS[month] + " " + year;
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth  = new Date(year, month + 1, 0).getDate();
+  const totalCells = 42;                       // always 6 rows: height never jumps
+  let htmlString = "";
 
-  for (let i = 0; i < cells; i++) {
-    const day = i - first + 1;
-    if (day < 1 || day > days) { html += '<div class="cell blank"></div>'; continue; }
-    const key = y + "-" + pad(m + 1) + "-" + pad(day);
-    const evs = byDay[key] || [];
-    const cls = "cell" + (key === D.today ? " today" : "") + (evs.length ? " has" : "");
-    html += '<div class="' + cls + '" data-d="' + key + '"><div class="num">' + day + "</div>";
-    for (const e of evs) {
-      const inner = (e.time ? '<span class="tm">' + esc(e.time) + "</span>" : "") +
-        '<span class="ti">' + esc(e.t) + "</span>" +
-        (e.place ? '<span class="lo">' + esc(e.place) + "</span>" : "");
-      const cls = "ev" + (e.sold ? " sold" : "") + (e.url ? "" : " soon");
-      html += e.url
-        ? '<a class="' + cls + '" href="' + esc(e.url) +
-          '" target="_blank" rel="noopener">' + inner + "</a>"
-        : '<span class="' + cls + '">' + inner + "</span>";
+  for (let cellIndex = 0; cellIndex < totalCells; cellIndex++) {
+    const day = cellIndex - firstWeekday + 1;
+    if (day < 1 || day > daysInMonth) { htmlString += '<div class="cell blank"></div>'; continue; }
+    const dateKey = year + "-" + padNumber(month + 1) + "-" + padNumber(day);
+    const eventsForDay = byDay[dateKey] || [];
+    const cellClassName = "cell" + (dateKey === calendarData.today ? " today" : "") + (eventsForDay.length ? " has" : "");
+    htmlString += '<div class="' + cellClassName + '" data-date="' + dateKey + '"><div class="num">' + day + "</div>";
+    for (const event of eventsForDay) {
+      const eventInnerHtml = (event.time ? '<span class="tm">' + escapeHtml(event.time) + "</span>" : "") +
+        '<span class="ti">' + escapeHtml(event.title) + "</span>" +
+        (event.place ? '<span class="lo">' + escapeHtml(event.place) + "</span>" : "");
+      const eventClassName = "ev" + (event.soldOut ? " sold" : "") + (event.url ? "" : " soon");
+      htmlString += event.url
+        ? '<a class="' + eventClassName + '" href="' + escapeHtml(event.url) +
+          '" target="_blank" rel="noopener">' + eventInnerHtml + "</a>"
+        : '<span class="' + eventClassName + '">' + eventInnerHtml + "</span>";
     }
-    html += "</div>";
+    htmlString += "</div>";
   }
-  grid.innerHTML = html;
+  grid.innerHTML = htmlString;
 }
 
-function popBody(evs) {
+function popoverBody(events) {
   return '<button class="x" id="popx" aria-label="Close">&times;</button>' +
-    evs.map((e) => {
-      const p = e.d.split("-").map(Number);
-      const wd = LONG[new Date(p[0], p[1] - 1, p[2]).getDay()];
-      const link = (label) => '<a class="btn" href="' + esc(e.url) +
+    events.map((event) => {
+      const dateParts = event.date.split("-").map(Number);
+      const weekdayName = WEEKDAYS_LONG[new Date(dateParts[0], dateParts[1] - 1, dateParts[2]).getDay()];
+      const buildTicketLink = (label) => '<a class="btn" href="' + escapeHtml(event.url) +
         '" target="_blank" rel="noopener">' + label + "</a>";
-      const cta = e.d < D.today
+      const callToAction = event.date < calendarData.today
         ? '<span class="pending">This event has passed</span>'
-        : !e.url
+        : !event.url
           ? '<span class="pending">Tickets not on sale yet</span>'
-          : e.sold
+          : event.soldOut
             ? '<p class="when" style="margin:10px 0 4px">Sold out</p>' +
-              link(e.wait ? "Join the waitlist" : "View on Eventbrite")
-            : link("Get tickets");
-      return "<h3>" + esc(e.t) + "</h3>" +
-        '<p class="when">' + wd + ", " + MONTHS[p[1] - 1] + " " + p[2] +
-        (e.range ? " &middot; " + esc(e.range) : "") + "</p>" +
-        (e.loc  ? "<p>" + esc(e.loc)  + "</p>" : "") +
-        (e.desc ? "<p>" + esc(e.desc) + "</p>" : "") + cta;
+              buildTicketLink(event.waitlist ? "Join the waitlist" : "View on Eventbrite")
+            : buildTicketLink("Get tickets");
+      return "<h3>" + escapeHtml(event.title) + "</h3>" +
+        '<p class="when">' + weekdayName + ", " + MONTHS[dateParts[1] - 1] + " " + dateParts[2] +
+        (event.range ? " &middot; " + escapeHtml(event.range) : "") + "</p>" +
+        (event.location    ? "<p>" + escapeHtml(event.location)    + "</p>" : "") +
+        (event.description ? "<p>" + escapeHtml(event.description) + "</p>" : "") + callToAction;
     }).join('<hr style="border:0;border-top:1px solid rgba(0,0,0,.1);margin:13px 0">');
 }
 
-function hidePop() {
-  pop.style.display = "none";
+function hidePopover() {
+  popover.style.display = "none";
   backdrop.style.display = "none";
 }
 
-function showPop(cell) {
-  const evs = byDay[cell.dataset.d] || [];
-  if (!evs.length) return;
-  clearTimeout(hideT);
-  pop.innerHTML = popBody(evs);
-  pop.style.display = "block";
-  const x = document.getElementById("popx");
-  if (x) x.onclick = hidePop;
+function showPopover(cell) {
+  const eventsForDay = byDay[cell.dataset.date] || [];
+  if (!eventsForDay.length) return;
+  clearTimeout(hideTimeout);
+  popover.innerHTML = popoverBody(eventsForDay);
+  popover.style.display = "block";
+  const closeButton = document.getElementById("popx");
+  if (closeButton) closeButton.onclick = hidePopover;
 
   backdrop.style.display = isMobile() ? "block" : "none";
-  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  const popoverWidth = popover.offsetWidth, popoverHeight = popover.offsetHeight;
   let left = isMobile()
-    ? (wrap.clientWidth - pw) / 2
-    : cell.offsetLeft + cell.offsetWidth / 2 - pw / 2;
-  left = Math.max(0, Math.min(left, wrap.clientWidth - pw));
+    ? (wrap.clientWidth - popoverWidth) / 2
+    : cell.offsetLeft + cell.offsetWidth / 2 - popoverWidth / 2;
+  left = Math.max(0, Math.min(left, wrap.clientWidth - popoverWidth));
   // anchor to the chip, not the bottom of the (now much taller) square cell
-  const chip = cell.querySelector(".ev");
-  const aTop = chip ? chip.offsetTop : cell.offsetTop;
-  const aH   = chip ? chip.offsetHeight : cell.offsetHeight;
-  let top = aTop + aH + 3;
-  if (top + ph > wrap.clientHeight) top = aTop - ph - 3;
+  const firstEventChip = cell.querySelector(".ev");
+  const anchorTop    = firstEventChip ? firstEventChip.offsetTop : cell.offsetTop;
+  const anchorHeight = firstEventChip ? firstEventChip.offsetHeight : cell.offsetHeight;
+  let top = anchorTop + anchorHeight + 3;
+  if (top + popoverHeight > wrap.clientHeight) top = anchorTop - popoverHeight - 3;
   if (top < 0) top = 0;
-  pop.style.left = left + "px";
-  pop.style.top  = top + "px";
+  popover.style.left = left + "px";
+  popover.style.top  = top + "px";
 }
 
-grid.addEventListener("mouseover", (ev) => {
+grid.addEventListener("mouseover", (mouseEvent) => {
   if (isMobile()) return;
-  const cell = ev.target.closest(".cell.has");
-  if (cell) { showPop(cell); return; }
+  const cell = mouseEvent.target.closest(".cell.has");
+  if (cell) { showPopover(cell); return; }
   // moved onto a day with no event -- close, but leave just enough time to
   // cross the few pixels between the chip and the popover itself
-  hideT = setTimeout(hidePop, 90);
+  hideTimeout = setTimeout(hidePopover, 90);
 });
 grid.addEventListener("mouseleave", () => {
-  if (!isMobile()) hideT = setTimeout(hidePop, 90);
+  if (!isMobile()) hideTimeout = setTimeout(hidePopover, 90);
 });
-pop.addEventListener("mouseenter", () => clearTimeout(hideT));
-pop.addEventListener("mouseleave", () => { if (!isMobile()) hidePop(); });
-grid.addEventListener("click", (ev) => {
+popover.addEventListener("mouseenter", () => clearTimeout(hideTimeout));
+popover.addEventListener("mouseleave", () => { if (!isMobile()) hidePopover(); });
+grid.addEventListener("click", (clickEvent) => {
   if (!isMobile()) return;
-  const cell = ev.target.closest(".cell.has");
-  if (cell) showPop(cell);
+  const cell = clickEvent.target.closest(".cell.has");
+  if (cell) showPopover(cell);
 });
-backdrop.addEventListener("click", hidePop);
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") hidePop(); });
+backdrop.addEventListener("click", hidePopover);
+document.addEventListener("keydown", (keyEvent) => { if (keyEvent.key === "Escape") hidePopover(); });
 
 document.getElementById("prev").onclick = () => {
-  if (--m < 0) { m = 11; y--; } hidePop(); renderGrid();
+  if (--month < 0) { month = 11; year--; } hidePopover(); renderGrid();
 };
 document.getElementById("next").onclick = () => {
-  if (++m > 11) { m = 0; y++; } hidePop(); renderGrid();
+  if (++month > 11) { month = 0; year++; } hidePopover(); renderGrid();
 };
 renderGrid();
 <\/script>
@@ -476,16 +479,16 @@ renderGrid();
 
 // ---------------------------------------------------------------- handler
 export const handler = async () => {
-  const { ebToken, googleKey } = await getSecrets();
+  const { eventbriteToken, googleKey } = await getSecrets();
 
-  const [googleEvents, ebEvents] = await Promise.all([
+  const [googleEvents, eventbriteEvents] = await Promise.all([
     fetchGoogle(googleKey),
-    fetchEventbrite(ebToken),
+    fetchEventbrite(eventbriteToken),
   ]);
 
-  const merged = merge(googleEvents, ebEvents);
+  const merged = merge(googleEvents, eventbriteEvents);
 
-  const put = (Key, Body, ContentType) => s3.send(new PutObjectCommand({
+  const put = (Key, Body, ContentType) => s3Client.send(new PutObjectCommand({
     Bucket: S3_BUCKET, Key, Body, ContentType,
     CacheControl: "public, max-age=300",
   }));
@@ -496,6 +499,6 @@ export const handler = async () => {
   ]);
 
   console.log(`Wrote ${merged.length} events ` +
-    `(${ebEvents.length} from Eventbrite, ${googleEvents.length} manual)`);
+    `(${eventbriteEvents.length} from Eventbrite, ${googleEvents.length} manual)`);
   return { ok: true, count: merged.length };
 };
